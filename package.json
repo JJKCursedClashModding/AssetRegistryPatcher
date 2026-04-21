@@ -1,0 +1,30 @@
+{
+  "name": "asset-registry-generator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Merge AssetManifest.json rows into a base cooked AssetRegistry.bin (v16).",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "npm run build && node dist/cli.js",
+    "merge": "npm run build && node dist/cli.js merge",
+    "build:exe": "npm run build && astra build dist/cli.js -n node_v22.13.1-win-x64 -o bin --noMetadata && if exist \"bin\\AssetRegistryGenerator.exe\" rmdir /s /q \"bin\\AssetRegistryGenerator.exe\" && move /y \"bin\\build.exe\" \"bin\\AssetRegistryGenerator.exe\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "jjku-asset-registry": "file:.."
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "astra-cli": "^1.3.1",
+    "typescript": "^5.7.2"
+  }
+}
