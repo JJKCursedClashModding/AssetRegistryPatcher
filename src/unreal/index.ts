@@ -46,7 +46,6 @@ export {
   type JobSetFieldFn,
   type RegistryRowBase,
 } from "./job/schema.js";
-export { loadJobFile } from "./job/loadJobFile.js";
 export {
   loadedAssetDataToRegistryBase,
   resolveJobRegistryBase,
