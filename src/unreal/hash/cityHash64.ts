@@ -11,7 +11,10 @@ function u64(x: bigint): bigint {
   return x & 0xffffffffffffffffn;
 }
 
+// BigInt never overflows: every helper wraps its inputs/products to 64 bits so
+// callers may pass unwrapped sums (C++ uint64 arithmetic wraps implicitly).
 function rot64(val: bigint, shift: number): bigint {
+  val = u64(val);
   if (shift === 0) {
     return u64(val);
   }
@@ -19,6 +22,7 @@ function rot64(val: bigint, shift: number): bigint {
 }
 
 function shiftMix(val: bigint): bigint {
+  val = u64(val);
   return u64(val ^ (val >> 47n));
 }
 
@@ -30,20 +34,18 @@ function fetch32(buf: Buffer, pos: number): bigint {
   return BigInt(buf.readUInt32LE(pos));
 }
 
+/** `CityHash128to64({ u, v })`. */
 function hashLen16(u: bigint, v: bigint): bigint {
-  const kMul = 0x9ddfea08eb382d69n;
-  let a = u64(u ^ v) * kMul;
-  a = u64(a ^ (a >> 47n));
-  let b = u64(v ^ a) * kMul;
-  b = u64(b ^ (b >> 47n));
-  return u64(b * kMul);
+  return hashLen16Mul(u, v, 0x9ddfea08eb382d69n);
 }
 
 function hashLen16Mul(u: bigint, v: bigint, mul: bigint): bigint {
-  let a = u64(u ^ v) * mul;
-  a = u64(a ^ (a >> 47n));
-  let b = u64(v ^ a) * mul;
-  b = u64(b ^ (b >> 47n));
+  u = u64(u);
+  v = u64(v);
+  let a = u64((u ^ v) * mul);
+  a = a ^ (a >> 47n);
+  let b = u64((v ^ a) * mul);
+  b = b ^ (b >> 47n);
   return u64(b * mul);
 }
 

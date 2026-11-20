@@ -16,6 +16,7 @@ export {
 } from "./registry/saveRegistry.js";
 export {
   joinTopLevelPath,
+  parseFNameWireFromRegistryTag,
   softObjectPathWireFromDisplayString,
   splitTopLevelAssetPath,
   topLevelPathWiresFromString,

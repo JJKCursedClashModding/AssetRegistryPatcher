@@ -13,6 +13,7 @@ import {
   assertRegistryRows,
   loadedAssetDataFromRegistryRow,
 } from "./manifestToRow.js";
+import { assetIdentityKey } from "./unreal/registry/identity.js";
 
 function usage(): string {
   return `Usage:
@@ -36,10 +37,6 @@ function argValue(argv: string[], name: string): string | undefined {
     return undefined;
   }
   return argv[i + 1];
-}
-
-function assetIdentityKey(packageName: string, assetName: string): string {
-  return `${packageName}\x1f${assetName}`;
 }
 
 function mergeCommand(argv: string[]): void {

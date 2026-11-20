@@ -12,6 +12,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "test": "tsc && node --test tests/registry.test.mjs",
     "start": "npm run build && node dist/cli.js",
     "merge": "npm run build && node dist/cli.js merge",
     "build:exe": "npm run build && astra build dist/cli.js -n node_v22.13.1-win-x64 -o bin --noMetadata && if exist \"bin\\AssetRegistryGenerator.exe\" rmdir /s /q \"bin\\AssetRegistryGenerator.exe\" && move /y \"bin\\build.exe\" \"bin\\AssetRegistryGenerator.exe\""

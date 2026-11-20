@@ -139,8 +139,8 @@ export function softObjectPathWireFromDisplayString(path: string): SoftObjectPat
   const { top, sub } = softObjectPathTopAndSub(path);
   const tl = splitTopLevelAssetPath(top);
   return {
-    packagePart: plainFName(tl.packagePart),
-    assetPart: plainFName(tl.assetPart || "None"),
+    packagePart: parseFNameWireFromRegistryTag(tl.packagePart),
+    assetPart: parseFNameWireFromRegistryTag(tl.assetPart || "None"),
     subUtf8: sub,
   };
 }
@@ -148,33 +148,27 @@ export function softObjectPathWireFromDisplayString(path: string): SoftObjectPat
 export function topLevelPathWiresFromString(classPath: string): { pkg: FNameWire; asset: FNameWire } {
   const tl = splitTopLevelAssetPath(classPath);
   return {
-    pkg: plainFName(tl.packagePart),
-    asset: plainFName(tl.assetPart || "None"),
+    pkg: parseFNameWireFromRegistryTag(tl.packagePart),
+    asset: parseFNameWireFromRegistryTag(tl.assetPart || "None"),
   };
 }
 
 /**
- * `FName` display for tag values (matches UE `FName` with optional `_Number` suffix).
+ * FName text -> wire form, mirroring `FNameHelper::ParseNumber` (UE 5.1 UnrealNames.cpp):
+ * only the last `_<digits>` splits, and only with no leading zero (a lone `0` is fine),
+ * at most 10 digits and a value < MAX_int32. Display `_N` is internal number `N+1`.
  *
- * UE internal storage: display suffix `_N` is stored as internal number `N+1`.
- * `_0` → internal 1, `_1` → internal 2, etc.  Semantic suffixes like `_010` are kept
- * as plain names (the leading-zero guard below).
+ * Every FName built from text must go through this: the cooked registry always stores
+ * splittable names as base + number (e.g. `/Game/Characters/CN_100` is
+ * (`/Game/Characters/CN`, 101)), and a whole entry with number 0 is a different FName,
+ * so lookups by path/name from the engine would miss it.
  */
 export function parseFNameWireFromRegistryTag(s: string): FNameWire {
-  if (!s.length) {
-    return plainFName("");
-  }
-  const m = s.match(/^(.*)_(\d+)$/);
+  const m = /^(.+)_(0|[1-9]\d{0,9})$/.exec(s);
   if (m) {
-    const digits = m[2]!;
-    // Keep semantic suffixes like `_010` as plain names (leading zero ≠ instance number).
-    if (digits.length > 1 && digits[0] === "0") {
-      return plainFName(s);
-    }
-    const n = parseInt(digits, 10);
-    // n >= 0: `_0` is a valid numbered suffix (internal number 1).
-    if (Number.isFinite(n) && n >= 0) {
-      return { base: m[1]!, number: (n + 1) >>> 0 };
+    const n = Number(m[2]);
+    if (n < 2147483647) {
+      return { base: m[1]!, number: n + 1 };
     }
   }
   return plainFName(s);

@@ -1,12 +1,11 @@
 import { BinaryWriter } from "../io/binaryWriter.js";
 import type { LoadedAssetData, AssetBundleEntry, SoftObjectPathWire } from "./assetData.js";
-import { softObjectPathWireDisplay } from "./assetData.js";
 import type { AssetRegistryHeader } from "./header.js";
 import { writeHeader } from "./header.js";
 import type { LoadedRegistry } from "./loadRegistry.js";
 import {
-  buildAssetSortKey,
   compareAssetsUeSaveOrder,
+  compareFNameWire,
   fnameWireLexicalLess,
   type FNameWire,
 } from "./fnameWire.js";
@@ -34,17 +33,14 @@ function sortedBundleEntries(bundles: AssetBundleEntry[]): AssetBundleEntry[] {
     })
     .map((e) => ({
       bundleName: e.bundleName,
-      paths: [...e.paths].sort((p1, p2) => {
-        const s1 = softObjectPathWireDisplay(p1).toLowerCase();
-        const s2 = softObjectPathWireDisplay(p2).toLowerCase();
-        if (s1 < s2) {
-          return -1;
-        }
-        if (s1 > s2) {
-          return 1;
-        }
-        return 0;
-      }),
+      // FSoftObjectPath::LexicalLess: package, asset (FName::Compare), then sub-path
+      // (FString::Compare, case-sensitive).
+      paths: [...e.paths].sort(
+        (p1, p2) =>
+          compareFNameWire(p1.packagePart, p2.packagePart) ||
+          compareFNameWire(p1.assetPart, p2.assetPart) ||
+          (p1.subUtf8 < p2.subUtf8 ? -1 : p1.subUtf8 > p2.subUtf8 ? 1 : 0),
+      ),
     }));
 }
 
@@ -133,12 +129,7 @@ function sortPackages(
 }
 
 function sortAssetsForUeSave(assets: LoadedAssetData[]): LoadedAssetData[] {
-  return [...assets].sort((a, b) =>
-    compareAssetsUeSaveOrder(
-      buildAssetSortKey(a.packageName, a.assetName),
-      buildAssetSortKey(b.packageName, b.assetName),
-    ),
-  );
+  return [...assets].sort(compareAssetsUeSaveOrder);
 }
 
 /** Optional `FAssetRegistrySerializationOptions::CookTagsAsName` / `CookTagsAsPath` for tag store rebuild. */

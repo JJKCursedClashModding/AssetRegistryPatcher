@@ -2,8 +2,9 @@ import { deriveLongPackageName, type ContentSegmentOptions } from "../job/conten
 import type { LoadedAssetData } from "./assetData.js";
 import { fNameToString } from "./fnameWire.js";
 
+/** FName comparison is case-insensitive: "/Game/Foo" and "/game/foo" are the same asset to the engine. */
 export function assetIdentityKey(packageName: string, assetName: string): string {
-  return `${packageName}\x1f${assetName}`;
+  return `${packageName}\x1f${assetName}`.toLowerCase();
 }
 
 export function buildBaseIdentitySet(assets: LoadedAssetData[]): Set<string> {

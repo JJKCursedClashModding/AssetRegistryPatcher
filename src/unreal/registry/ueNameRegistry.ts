@@ -1,7 +1,7 @@
 import { BinaryWriter } from "../io/binaryWriter.js";
 import { NAME_NUMBERED_BIT } from "./constants.js";
 import type { FNameWire } from "./fnameWire.js";
-import { generateLowerCaseHashForNameBatchEntry } from "./nameHash.js";
+import { FNAME_HASH_ALGORITHM_ID, generateLowerCaseHashForNameBatchEntry } from "./nameHash.js";
 
 function isWideName(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
@@ -90,9 +90,11 @@ export class UeNameRegistry {
 
     w.writeU32(num >>> 0);
     w.writeU32(stringsBuf.length >>> 0);
-    // Conservative compatibility: force runtime re-hash from serialized names.
-    // UE `LoadNameBatch` ignores saved hashes when HashVersion != FNameHash::AlgorithmId.
-    w.writeU64(0n);
+    // Same HashVersion as the cooker: UE `LoadNameBatch` then trusts these hashes
+    // instead of re-hashing (`CanUseSavedHashes`). They must be exact — a wrong hash
+    // puts the name in the wrong pool slot and lookups fail silently; the tests
+    // check them against every name in the stock registry.
+    w.writeU64(FNAME_HASH_ALGORITHM_ID);
     w.writeBytes(hashBuf);
     w.writeBytes(headers);
     w.writeBytes(stringsBuf);

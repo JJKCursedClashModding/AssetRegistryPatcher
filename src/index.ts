@@ -9,10 +9,7 @@ import {
   assertRegistryRows,
   loadedAssetDataFromRegistryRow,
 } from "./manifestToRow.js";
-
-function assetIdentityKey(packageName: string, assetName: string): string {
-  return `${packageName}\x1f${assetName}`;
-}
+import { assetIdentityKey } from "./unreal/registry/identity.js";
 
 /**
  * Applies a JSON array of registry rows to a base AssetRegistry.bin buffer,

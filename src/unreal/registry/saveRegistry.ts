@@ -90,16 +90,16 @@ export function mergePackageRowsForSave(
   stagedAssets: LoadedAssetData[],
   packageDataByPackageName?: ReadonlyMap<string, LoadedPackageDataV16>,
 ): Array<{ name: FNameWire; data: LoadedPackageDataV16 }> {
-  const known = new Set(basePackages.map((p) => fNameToString(p.name)));
+  const known = new Set(basePackages.map((p) => fNameToString(p.name).toLowerCase()));
   const out = [...basePackages];
   for (const a of stagedAssets) {
     const pn = fNameToString(a.packageName);
-    if (!known.has(pn)) {
+    if (!known.has(pn.toLowerCase())) {
       out.push({
         name: a.packageName,
         data: packageDataByPackageName?.get(pn) ?? defaultPackageDataV16(pn),
       });
-      known.add(pn);
+      known.add(pn.toLowerCase());
     }
   }
   return out;

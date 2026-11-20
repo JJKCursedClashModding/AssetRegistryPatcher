@@ -1,6 +1,6 @@
 import {
   type LoadedAssetData,
-  plainFName,
+  parseFNameWireFromRegistryTag,
   softObjectPathWireFromDisplayString,
   topLevelPathWiresFromString,
 } from "./unreal/index.js";
@@ -188,7 +188,7 @@ function cloneBundlesFromRow(b?: RegistryRow["bundles"]) {
     return [];
   }
   return b.map((x) => ({
-    bundleName: plainFName(x.bundleName),
+    bundleName: parseFNameWireFromRegistryTag(x.bundleName),
     paths: x.paths.map((p) => softObjectPathWireFromDisplayString(p)),
   }));
 }
@@ -204,11 +204,11 @@ export function loadedAssetDataFromRegistryRow(row: RegistryRow, ctx: string): L
   const bundles = cloneBundlesFromRow(row.bundles);
 
   return {
-    packagePath: plainFName(parentPath(row.packageName)),
+    packagePath: parseFNameWireFromRegistryTag(parentPath(row.packageName)),
     assetClassPathPackage,
     assetClassPathAsset,
-    packageName: plainFName(row.packageName),
-    assetName: plainFName(row.objectName),
+    packageName: parseFNameWireFromRegistryTag(row.packageName),
+    assetName: parseFNameWireFromRegistryTag(row.objectName),
     tags,
     tagValueTypeHints: undefined,
     bundles,
