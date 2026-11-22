@@ -24,7 +24,7 @@ function usage(): string {
 Commands:
   merge       Reads a cooked v16 base registry, appends rows from a JSON array of registry rows
               (append-only; skips rows whose package+asset already exist), and writes a new .bin.
-              Each row must have: packageName, objectName. Optional: classPath, packageFlags,
+              Each row must have: packageName, objectName, classPath. Optional: packageFlags,
               packageFlagsHex (ignored), chunkIds, tags, bundles.
   print-row   Loads a cooked v16 registry .bin and prints all rows whose PackageName or ObjectName matches --row.
               Matching is case-insensitive; partial substring matches are supported.
@@ -89,7 +89,7 @@ function mergeCommand(argv: string[]): void {
   const out = serializeRegistryState(
     reg.header,
     mergedAssets,
-    reg.dependencySection,
+    reg.dependencyData,
     reg.packages,
     cookOpts,
   );

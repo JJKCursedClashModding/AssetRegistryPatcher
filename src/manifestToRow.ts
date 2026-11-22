@@ -2,10 +2,14 @@ import {
   type LoadedAssetData,
   parseFNameWireFromRegistryTag,
   softObjectPathWireFromDisplayString,
-  topLevelPathWiresFromString,
+  classPathWiresFromString,
 } from "./unreal/index.js";
 
-const DEFAULT_ASSET_CLASS = "/Script/CoreUObject.Object";
+/**
+ * PKG_FilterEditorOnly | PKG_UnversionedProperties | PKG_Cooked (ObjectMacros.h): the flags every
+ * cooked package in the stock registry carries (all 52,559 rows have at least 0x80002200).
+ */
+const DEFAULT_COOKED_PACKAGE_FLAGS = 0x80002200;
 
 function parentPath(longPackage: string): string {
   const i = longPackage.lastIndexOf("/");
@@ -19,8 +23,8 @@ function parentPath(longPackage: string): string {
  *   packageName   – full UE package path, e.g. `/Game/Mods/Foo/Bar`
  *   objectName    – asset object name, e.g. `Bar`
  *   packagePath   – (informational) parent folder; ignored on input, derived from packageName
- *   classPath     – full top-level class path, e.g. `/Script/Engine.AnimMontage`
- *   packageFlags  – integer (or hex string) package flags
+ *   classPath     – (required) full top-level class path, e.g. `/Script/Engine.AnimMontage`
+ *   packageFlags  – integer (or hex string) package flags; defaults to 0x80002200 (cooked)
  *   packageFlagsHex – (informational) ignored on input
  *   chunkIds      – array of integer chunk IDs
  *   tags          – string→string map of FAssetData tags
@@ -30,7 +34,7 @@ export interface RegistryRow {
   packageName: string;
   objectName: string;
   packagePath?: string;
-  classPath?: string;
+  classPath: string;
   packageFlags?: number | string;
   packageFlagsHex?: string;
   chunkIds?: number[];
@@ -39,7 +43,7 @@ export interface RegistryRow {
 }
 
 function parsePackageFlags(raw: number | string | undefined, ctx: string): number {
-  if (raw === undefined) return 0;
+  if (raw === undefined) return DEFAULT_COOKED_PACKAGE_FLAGS;
   if (typeof raw === "number") {
     if (!Number.isInteger(raw)) throw new Error(`${ctx}.packageFlags must be an integer`);
     return raw >>> 0;
@@ -151,14 +155,16 @@ export function assertRegistryRows(raw: unknown, label: string): RegistryRow[] {
       throw new Error(`${ctx}.objectName must be a non-empty string`);
     }
 
+    if (typeof o.classPath !== "string" || !o.classPath.trim().length) {
+      throw new Error(`${ctx}.classPath must be a non-empty string (e.g. "/Script/Engine.Texture2D")`);
+    }
+    classPathWiresFromString(o.classPath.trim(), ctx);
+
     const row: RegistryRow = {
       packageName: o.packageName,
       objectName: o.objectName,
+      classPath: o.classPath.trim(),
     };
-
-    if (typeof o.classPath === "string" && o.classPath.length) {
-      row.classPath = o.classPath;
-    }
 
     if (o.packageFlags !== undefined) {
       if (typeof o.packageFlags !== "number" && typeof o.packageFlags !== "string") {
@@ -194,9 +200,12 @@ function cloneBundlesFromRow(b?: RegistryRow["bundles"]) {
 }
 
 export function loadedAssetDataFromRegistryRow(row: RegistryRow, ctx: string): LoadedAssetData {
-  const classPathStr = row.classPath?.trim() || DEFAULT_ASSET_CLASS;
+  const classPathStr = typeof row.classPath === "string" ? row.classPath.trim() : "";
+  if (!classPathStr) {
+    throw new Error(`${ctx}: classPath is required (e.g. "/Script/Engine.Texture2D")`);
+  }
   const { pkg: assetClassPathPackage, asset: assetClassPathAsset } =
-    topLevelPathWiresFromString(classPathStr);
+    classPathWiresFromString(classPathStr, ctx);
 
   const packageFlags = parsePackageFlags(row.packageFlags, ctx);
   const chunkIds = row.chunkIds !== undefined ? [...row.chunkIds] : [0];

@@ -4,10 +4,11 @@ import type { FNameWire } from "./fnameWire.js";
 import { readFNameWire, type NameTable } from "./nameBatch.js";
 import type { UeNameRegistry } from "./ueNameRegistry.js";
 
-// UE `FDependsNode` uses TPropertyCombinationSet storage-bit counts, not `1 << BitWidth`:
-// PackageFlagWidth=3 -> StorageBitCount=5, ManageFlagWidth=2 -> StorageBitCount=3.
+// UE `FDependsNode` flag-set widths are TPropertyCombinationSet<W>::StorageBitCount
+// (DependsNode.h): PackageFlagWidth=3 -> TPropertyCombinationSet<3> (hardcoded pack) = 5 bits;
+// ManageFlagWidth=1 -> TPropertyCombinationSet<1> specialization = 1 bit.
 const PACKAGE_FLAG_SET_WIDTH = 5;
-const MANAGE_FLAG_SET_WIDTH = 3;
+const MANAGE_FLAG_SET_WIDTH = 1;
 
 export interface AssetIdentifierWire {
   packageName?: FNameWire;

@@ -15,6 +15,7 @@ export {
   type CookTagOptions,
 } from "./registry/saveRegistry.js";
 export {
+  classPathWiresFromString,
   joinTopLevelPath,
   parseFNameWireFromRegistryTag,
   softObjectPathWireFromDisplayString,

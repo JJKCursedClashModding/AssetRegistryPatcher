@@ -12,7 +12,8 @@ export interface LoadedRegistry {
   nameTable: NameTable;
   store: ParsedFixedStoreInternal;
   assets: LoadedAssetData[];
-  /** Raw dependency section v1 blob (preserved on save). */
+  /** Raw dependency section bytes as read. FName indices refer to the input name table, so
+   * this is for inspection only; saving re-serializes {@link dependencyData}. */
   dependencySection: Buffer;
   /** Parsed dependency graph section (NumDependencies + nodes). */
   dependencyData: DependencySectionWire;

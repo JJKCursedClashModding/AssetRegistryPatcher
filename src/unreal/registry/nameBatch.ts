@@ -35,9 +35,7 @@ export function loadNameBatch(r: BinaryReader): NameTable {
     const len = ((b0 & 0x7f) << 8) | b1;
 
     if (isUtf16) {
-      if (strOff % 2 !== 0) {
-        strOff += 1;
-      }
+      // FNameBatchLoader (FArchive form) reads strings contiguously; no alignment padding.
       const byteLen = len * 2;
       const slice = stringsBuf.subarray(strOff, strOff + byteLen);
       strOff += byteLen;

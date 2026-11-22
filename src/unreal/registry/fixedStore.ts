@@ -6,7 +6,8 @@ import {
   FIXED_TAG_END_MAGIC,
   MARSHALLED_TEXT_UTF8_ENUM,
 } from "./constants.js";
-import { readFName, type NameTable } from "./nameBatch.js";
+import { readFName, readFNameWire, type NameTable } from "./nameBatch.js";
+import { assetRegistryExportPathDisplay } from "./assetData.js";
 
 const enum EValueType {
   AnsiString = 0,
@@ -46,29 +47,15 @@ function valueIdFromInt(u: number): { type: EValueType; index: number } {
   return { type, index };
 }
 
-function readTopLevelPath(r: BinaryReader, table: NameTable): string {
-  const pkg = readFName(r, table);
-  const asset = readFName(r, table);
-  if (!asset || asset.length === 0) {
-    return pkg;
-  }
-  return `${pkg}.${asset}`;
-}
-
 function readAssetRegistryExportPath(r: BinaryReader, table: NameTable, fileVersion: number): string {
   if (fileVersion < CLASS_PATHS_ENUM) {
     throw new Error("Legacy class FName export path not implemented");
   }
-  const classPath = readTopLevelPath(r, table);
-  const objectName = readFName(r, table);
-  const packageName = readFName(r, table);
-  if (classPath.length === 0) {
-    if (!objectName.length) {
-      return packageName;
-    }
-    return `${packageName}.${objectName}`;
-  }
-  return `${classPath}'${packageName}.${objectName}'`;
+  const classPkg = readFNameWire(r, table);
+  const classAsset = readFNameWire(r, table);
+  const objectName = readFNameWire(r, table);
+  const packageName = readFNameWire(r, table);
+  return assetRegistryExportPathDisplay({ classPkg, classAsset, objectName, packageName });
 }
 
 function readNumberlessExportPath(r: BinaryReader, table: NameTable, fileVersion: number): string {

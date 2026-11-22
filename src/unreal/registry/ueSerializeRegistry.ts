@@ -17,7 +17,8 @@ import { buildDependencySectionPayload, type DependencySectionWire } from "./dep
 function writeSoftObjectPathWire(w: BinaryWriter, names: UeNameRegistry, p: SoftObjectPathWire): void {
   names.writeFName(w, p.packagePart);
   names.writeFName(w, p.assetPart);
-  w.writeUtf8StringNoNul(p.subUtf8);
+  // FSoftObjectPath::SubPathString is an FString (NUL-inclusive count; negative + UTF-16 if non-ASCII).
+  w.writeFStringUE(p.subUtf8);
 }
 
 function sortedBundleEntries(bundles: AssetBundleEntry[]): AssetBundleEntry[] {
@@ -84,7 +85,8 @@ function writeOneAsset(
 function writeAssetPackageDataV16Ue(w: BinaryWriter, names: UeNameRegistry, p: LoadedPackageDataV16): void {
   w.writeI64(p.diskSize);
   w.writeBytes(p.legacyGuid);
-  w.writeU8(p.cookedValid ? 1 : 0);
+  // FMD5Hash::bIsValid: FArchive bool is a 4-byte UBOOL.
+  w.writeU32(p.cookedValid ? 1 : 0);
   if (p.cookedValid) {
     if (!p.cookedBytes || p.cookedBytes.length !== 16) {
       throw new Error("cookedBytes must be 16 bytes when cookedValid");
@@ -108,10 +110,26 @@ function writeAssetPackageDataV16Ue(w: BinaryWriter, names: UeNameRegistry, p: L
     w.writeBytes(cv.guid);
     w.writeI32(cv.version);
   }
-  w.writeI32(p.importedClasses.length);
-  for (const cls of p.importedClasses) {
+  const importedClasses = sortedImportedClasses(p.importedClasses);
+  w.writeI32(importedClasses.length);
+  for (const cls of importedClasses) {
     names.writeFName(w, cls);
   }
+}
+
+/**
+ * `FAssetPackageData::SerializeForCacheInternal` (AssetData.cpp): when saving,
+ * `if (!Algo::IsSorted(ImportedClasses, FNameLexicalLess())) Algo::Sort(...)`. Only the save
+ * path sorts (loading and FPackageReader keep the order given), so an already-sorted array,
+ * including its order among Compare-equal names, is written unchanged.
+ */
+export function sortedImportedClasses(classes: readonly FNameWire[]): readonly FNameWire[] {
+  for (let i = 1; i < classes.length; i++) {
+    if (fnameWireLexicalLess(classes[i]!, classes[i - 1]!)) {
+      return [...classes].sort(compareFNameWire);
+    }
+  }
+  return classes;
 }
 
 function sortPackages(
@@ -145,7 +163,7 @@ export type SerializeRegistryTagOptions = Pick<
 export function serializeRegistryStateUe(
   header: AssetRegistryHeader,
   assets: LoadedAssetData[],
-  dependencySection: Buffer | DependencySectionWire,
+  dependencySection: DependencySectionWire,
   packages: Array<{ name: FNameWire; data: LoadedPackageDataV16 }>,
   tagOptions?: SerializeRegistryTagOptions,
 ): Buffer {
@@ -160,13 +178,14 @@ export function serializeRegistryStateUe(
   });
   const mem = new BinaryWriter();
 
-  const dependencySectionBytes = Buffer.isBuffer(dependencySection)
-    ? dependencySection
-    : buildDependencySectionPayload(dependencySection, names);
   mem.writeI32(sortedAssets.length);
   for (const a of sortedAssets) {
     writeOneAsset(mem, names, tagBuilder, a);
   }
+  // FDependsNode::SerializeSave goes through the same FAssetRegistryWriter after the assets,
+  // so identifier FNames are interned into the new name table in that order. (A raw blob from
+  // the input would carry indices into the old name table.)
+  const dependencySectionBytes = buildDependencySectionPayload(dependencySection, names);
   mem.writeI64(BigInt(dependencySectionBytes.length));
   mem.writeBytes(dependencySectionBytes);
   mem.writeI32(sortedPackages.length);
@@ -192,5 +211,5 @@ export function serializeRegistryStateUe(
 }
 
 export function serializeLoadedRegistryUe(reg: LoadedRegistry): Buffer {
-  return serializeRegistryStateUe(reg.header, reg.assets, reg.dependencySection, reg.packages);
+  return serializeRegistryStateUe(reg.header, reg.assets, reg.dependencyData, reg.packages);
 }

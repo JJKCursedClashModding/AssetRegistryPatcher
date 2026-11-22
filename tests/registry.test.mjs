@@ -9,7 +9,30 @@ import { parseFNameWireFromRegistryTag } from "../dist/unreal/registry/assetData
 import { compareFNameWire } from "../dist/unreal/registry/fnameWire.js";
 import { cityHash64 } from "../dist/unreal/hash/cityHash64.js";
 import { generateLowerCaseHashForNameBatchEntry } from "../dist/unreal/registry/nameHash.js";
-import { loadedAssetDataFromRegistryRow } from "../dist/manifestToRow.js";
+import { assertRegistryRows, loadedAssetDataFromRegistryRow } from "../dist/manifestToRow.js";
+import {
+  buildEmptyAssetRegistryBin,
+  saveRegistryWithStagedAssets,
+  serializeRegistryState,
+} from "../dist/unreal/registry/saveRegistry.js";
+import {
+  parseAssetRegistryExportPathFromDisplay,
+  softObjectPathWireDisplay,
+  softObjectPathWireFromDisplayString,
+  topLevelPathWiresFromString,
+  classPathWiresFromString,
+} from "../dist/unreal/registry/assetData.js";
+import { sortedImportedClasses } from "../dist/unreal/registry/ueSerializeRegistry.js";
+import { UeNameRegistry } from "../dist/unreal/registry/ueNameRegistry.js";
+import { loadNameBatch } from "../dist/unreal/registry/nameBatch.js";
+import { BinaryReader } from "../dist/unreal/io/binaryReader.js";
+import { BinaryWriter } from "../dist/unreal/io/binaryWriter.js";
+import { FixedTagStoreBuilder } from "../dist/unreal/registry/fixedTagStoreBuilder.js";
+import { defaultPackageDataV16, packageDataV16FromCookedAssetFile } from "../dist/unreal/registry/packageDataRw.js";
+import { assetIdentityKey } from "../dist/unreal/registry/identity.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const w = (base, number = 0) => ({ base, number });
 
@@ -19,8 +42,14 @@ describe("FName text -> wire (FNameHelper::ParseNumber)", () => {
     assert.deepEqual(parseFNameWireFromRegistryTag("Text_1_0"), w("Text_1", 1));
     assert.deepEqual(parseFNameWireFromRegistryTag("/Game/Characters/CN_100"), w("/Game/Characters/CN", 101));
     assert.deepEqual(parseFNameWireFromRegistryTag("Used_2147483646"), w("Used", 2147483647));
-    for (const whole of ["Text_00", "Text_01", "Used_2147483647", "Used_12345678901", "Text_", "Text", "", "_"]) {
+    for (const whole of ["Text_00", "Text_01", "Used_2147483647", "Used_12345678901", "Text_", "Text", "_", "_01"]) {
       assert.deepEqual(parseFNameWireFromRegistryTag(whole), w(whole), whole);
+    }
+  });
+
+  it("maps empty names and bare _<number> to NAME_None (MakeWithNumber with Len 0)", () => {
+    for (const none of ["", "_0", "_1", "_123"]) {
+      assert.deepEqual(parseFNameWireFromRegistryTag(none), w("None"), none);
     }
   });
 
@@ -32,7 +61,7 @@ describe("FName text -> wire (FNameHelper::ParseNumber)", () => {
 
   it("splits package, path and asset names of new rows", () => {
     const a = loadedAssetDataFromRegistryRow(
-      { packageName: "/Game/Mod/CP_300/T_Emblem_9001", objectName: "T_Emblem_9001" },
+      { packageName: "/Game/Mod/CP_300/T_Emblem_9001", objectName: "T_Emblem_9001", classPath: "/Script/Engine.Texture2D" },
       "test",
     );
     assert.deepEqual(a.packagePath, w("/Game/Mod/CP", 301));
@@ -99,6 +128,297 @@ describe("CityHash64 / name batch hashes", () => {
   });
 });
 
+describe("name batch (FArchive SaveNameBatch / LoadNameBatch)", () => {
+  it("stores wide names contiguously, without UTF-16 alignment padding", () => {
+    const list = ["A", "T_呪術", "B", "T_é", "xyz"];
+    const names = new UeNameRegistry();
+    const sink = new BinaryWriter();
+    for (const s of list) names.writeFName(sink, w(s));
+    const out = new BinaryWriter();
+    names.appendNameBatchTo(out);
+    const buf = out.toBuffer();
+    const unpadded = list.reduce((n, s) => n + (/[^\x00-\x7f]/.test(s) ? s.length * 2 : s.length), 0);
+    assert.equal(buf.readUInt32LE(4), unpadded); // NumStringBytes
+    assert.equal(buf.length, 4 + 4 + 8 + list.length * (8 + 2) + unpadded);
+    assert.deepEqual(loadNameBatch(new BinaryReader(buf)).entries, list);
+  });
+
+  it("writes an empty name as None and rejects names of NAME_SIZE or more", () => {
+    const names = new UeNameRegistry();
+    names.writeFName(new BinaryWriter(), w("", 5));
+    assert.deepEqual(names.getDisplayEntriesInOrder(), ["None"]);
+    const ok = new UeNameRegistry();
+    ok.writeFName(new BinaryWriter(), w("x".repeat(1023)));
+    ok.appendNameBatchTo(new BinaryWriter());
+    const long = new UeNameRegistry();
+    long.writeFName(new BinaryWriter(), w("x".repeat(1024)));
+    assert.throws(() => long.appendNameBatchTo(new BinaryWriter()), /too long/);
+  });
+});
+
+describe("paths (FTopLevelAssetPath / FSoftObjectPath / ParseExportPath)", () => {
+  it("splits top-level paths on the first dot and rejects sub-object paths", () => {
+    assert.deepEqual(topLevelPathWiresFromString("/Script/Engine.Texture2D"), {
+      pkg: w("/Script/Engine"),
+      asset: w("Texture2D"),
+    });
+    assert.deepEqual(topLevelPathWiresFromString("/Game/Pkg"), { pkg: w("/Game/Pkg"), asset: w("None") });
+    assert.throws(() => topLevelPathWiresFromString("/Game/A.B.C"), /sub-object/);
+    assert.throws(() => topLevelPathWiresFromString("/Game/A.B:C"), /sub-object/);
+  });
+
+  it("rejects short names in top-level paths (TrySetPath ensure + Reset)", () => {
+    assert.throws(() => topLevelPathWiresFromString("Texture2D"), /short names/);
+    assert.deepEqual(topLevelPathWiresFromString(""), { pkg: w("None"), asset: w("None") });
+  });
+
+  it("accepts only full /Package.Class paths as class paths", () => {
+    assert.deepEqual(classPathWiresFromString("/Script/Engine.Texture2D"), {
+      pkg: w("/Script/Engine"),
+      asset: w("Texture2D"),
+    });
+    assert.deepEqual(classPathWiresFromString("/Game/BP/BP_Foo.BP_Foo_C").asset, w("BP_Foo_C"));
+    for (const bad of [
+      "Texture2D",
+      "Engine.Texture2D",
+      "/Script/Engine",
+      "/Script/Engine.A.B",
+      "/Script/Engine.A:B",
+      "/Script/Engine.",
+      "/.Texture2D",
+      "/Script/.Texture2D",
+      "/Script/Engine.None",
+      "None",
+    ]) {
+      assert.throws(() => classPathWiresFromString(bad, "row[3]"), /row\[3\]: classPath .*\/Script\/Engine\.Texture2D/, bad);
+    }
+  });
+
+  it("splits soft object paths like FSoftObjectPath::SetPath", () => {
+    const p = softObjectPathWireFromDisplayString("/Game/A.B.C:D");
+    assert.deepEqual([p.packagePart, p.assetPart, p.subUtf8], [w("/Game/A"), w("B"), "C.D"]);
+    const q = softObjectPathWireFromDisplayString("/Game/A.B:C");
+    assert.deepEqual([q.packagePart, q.assetPart, q.subUtf8], [w("/Game/A"), w("B"), "C"]);
+    const r = softObjectPathWireFromDisplayString("/Game/A");
+    assert.deepEqual([r.packagePart, r.assetPart, r.subUtf8], [w("/Game/A"), w("None"), ""]);
+  });
+
+  it("parses export paths like ParseExportPath", () => {
+    assert.deepEqual(parseAssetRegistryExportPathFromDisplay("/Game/Mod/BP.BP_C"), {
+      classPkg: w("None"),
+      classAsset: w("None"),
+      packageName: w("/Game/Mod/BP"),
+      objectName: w("BP_C"),
+    });
+    assert.deepEqual(parseAssetRegistryExportPathFromDisplay("/Script/Engine.Blueprint'/Game/A.B:C'"), {
+      classPkg: w("/Script/Engine"),
+      classAsset: w("Blueprint"),
+      packageName: w("/Game/A"),
+      objectName: w("B:C"),
+    });
+    assert.deepEqual(parseAssetRegistryExportPathFromDisplay("/Game/Pkg").objectName, w("None"));
+  });
+});
+
+describe("synthetic registry round-trips", () => {
+  const header = loadRegistryLoose(buildEmptyAssetRegistryBin()).header;
+  const row = (packageName, objectName, extra = {}) =>
+    loadedAssetDataFromRegistryRow({ packageName, objectName, classPath: "/Script/Engine.Texture2D", ...extra }, "t");
+  const cooked = Buffer.alloc(16, 0xab);
+  const pkgData = {
+    ...defaultPackageDataV16(""),
+    cookedValid: true,
+    cookedBytes: cooked,
+    importedClasses: [w("Texture2D")],
+  };
+  const dep = {
+    nodes: [
+      {
+        identifier: { packageName: w("/Game/Dep/A") },
+        packageDependencies: [1],
+        packageFlagWords: [0x1f],
+        nameDependencies: [],
+        // 33 manage deps × 1 bit (ManageFlagSetWidth) = 2 words.
+        manageDependencies: Array.from({ length: 33 }, () => 1),
+        manageFlagWords: [0xffffffff, 1],
+        referencers: [],
+      },
+      {
+        identifier: {
+          packageName: w("/Game/Dep/B"),
+          primaryAssetType: w("PrimType"),
+          objectName: w("Obj", 3),
+          valueName: w("Val"),
+        },
+        packageDependencies: [],
+        packageFlagWords: [],
+        nameDependencies: [0],
+        manageDependencies: [],
+        manageFlagWords: [],
+        referencers: [0],
+      },
+    ],
+  };
+  const base = serializeRegistryState(header, [row("/Game/Dep/A", "A")], dep, [
+    { name: w("/Game/Dep/A"), data: pkgData },
+  ]);
+
+  it("re-interns dependency names and keeps package data through a merge", () => {
+    // The new row's names are interned first, shifting every name index of the base file.
+    const merged = applyJsonToAssetRegistry(base, [{ packageName: "/Game/AAA/First", objectName: "First", classPath: "/Script/Engine.Texture2D" }]);
+    const reg = loadRegistryLoose(merged);
+    assert.equal(reg.nameTable.entries[0], "/Game/AAA");
+    assert.deepEqual(reg.dependencyData, dep);
+    assert.equal(reg.packages.length, 1);
+    assert.deepEqual(reg.packages[0].data.cookedBytes, cooked);
+    assert.deepEqual(reg.packages[0].data.importedClasses, [w("Texture2D")]);
+    // FMD5Hash::bIsValid is a 4-byte UBOOL followed by the 16 hash bytes.
+    assert.ok(merged.indexOf(Buffer.concat([Buffer.from([1, 0, 0, 0]), cooked])) > 0);
+  });
+
+  it("sorts ImportedClasses with FNameLexicalLess on save, like SerializeForCacheInternal", () => {
+    const sorted = [
+      w("/Script/Engine.AnimSequence"),
+      w("/script/engine.Texture2D"),
+      // FName::Compare: base first, then number, so SK_CN_050_10 (base SK_CN_050, 11) < SK_CN_050_00.
+      w("/Script/X.SK_CN_050", 11),
+      w("/Script/X.SK_CN_050_00"),
+      w("/Script/X.SK_CN_050_00", 2),
+    ];
+    const unsorted = [sorted[3], sorted[1], sorted[4], sorted[0], sorted[2]];
+    const build = (classes) =>
+      serializeRegistryState(header, [row("/Game/Imp/A", "A")], { nodes: [] }, [
+        { name: w("/Game/Imp/A"), data: { ...pkgData, importedClasses: classes } },
+      ]);
+    const fromUnsorted = build(unsorted);
+    const reg = loadRegistryLoose(fromUnsorted);
+    assert.deepEqual(reg.packages[0].data.importedClasses, sorted);
+    // Same bytes (incl. name-batch order) as writing the sorted array; re-saving is a no-op.
+    assert.ok(fromUnsorted.equals(build(sorted)));
+    assert.ok(serializeRegistryState(reg.header, reg.assets, reg.dependencyData, reg.packages).equals(fromUnsorted));
+    // Input array is not mutated; an already-sorted array (incl. Compare-equal names) is kept as-is.
+    assert.equal(unsorted[0], sorted[3]);
+    const ties = [w("/Script/A.b"), w("/Script/A.B")];
+    assert.equal(sortedImportedClasses(ties), ties);
+    // A merge re-sorts package rows it rebuilds from an unsorted base.
+    const merged = loadRegistryLoose(applyJsonToAssetRegistry(fromUnsorted, []));
+    assert.deepEqual(merged.packages[0].data.importedClasses, sorted);
+  });
+
+  it("keeps package data in saveRegistryWithStagedAssets", () => {
+    const reg = loadRegistryLoose(saveRegistryWithStagedAssets(loadRegistryLoose(base), [row("/Game/New/N", "N")]));
+    const names = reg.packages.map((p) => fNameToString(p.name)).sort();
+    assert.deepEqual(names, ["/Game/Dep/A", "/Game/New/N"]);
+    assert.deepEqual(reg.packages.find((p) => p.name.base === "/Game/Dep/A").data.cookedBytes, cooked);
+  });
+
+  it("round-trips bundle sub-paths as FStrings, including non-ASCII", () => {
+    const a = row("/Game/B/X", "X", {});
+    a.bundles = [
+      { bundleName: w("Game"), paths: ["/Game/B/Y.Y", "/Game/B/Z.Z:Sub_é"].map(softObjectPathWireFromDisplayString) },
+    ];
+    const out = serializeRegistryState(header, [a], { nodes: [] }, []);
+    const reg = loadRegistryLoose(out);
+    assert.deepEqual(reg.assets[0].bundles[0].paths.map(softObjectPathWireDisplay), ["/Game/B/Y.Y", "/Game/B/Z.Z:Sub_é"]);
+    // Empty sub-path is SaveNum 0; "Sub_é" is SaveNum -6 followed by UTF-16 incl. NUL.
+    assert.ok(out.indexOf(Buffer.concat([Buffer.from([0xfa, 0xff, 0xff, 0xff]), Buffer.from("Sub_é\0", "utf16le")])) > 0);
+  });
+
+  it("stores empty names and unquoted export paths like the engine", () => {
+    const a = row("NoSlash", "NoSlash", {
+      tags: { PathTag: "/Game/Mod/BP.BP_C", NameTag: "", PkgOnly: "/Game/Mod/Pkg" },
+    });
+    assert.deepEqual(a.packagePath, w("None"));
+    const out = serializeRegistryState(header, [a], { nodes: [] }, [], {
+      cookTagsAsName: new Set(["NameTag"]),
+      cookTagsAsPath: new Set(["PathTag", "PkgOnly"]),
+    });
+    const reg = loadRegistryLoose(out);
+    assert.ok(!reg.nameTable.entries.includes(""));
+    assert.deepEqual(reg.assets[0].tags, { NameTag: "None", PathTag: "/Game/Mod/BP.BP_C", PkgOnly: "/Game/Mod/Pkg" });
+    assert.deepEqual(reg.store.numberlessExportPaths.sort(), ["/Game/Mod/BP.BP_C", "/Game/Mod/Pkg"]);
+  });
+
+  it("detects complex text by IsComplexText marker prefix and sorts keys by FName::Compare", () => {
+    const tags = {
+      abc_0a: "1",
+      abc_10: "2",
+      T1: 'LOCTABLE("/Game/ST", "Key")',
+      T2: 'LOCGEN_NUMBER(1, "")',
+      T3: ' NSLOCTEXT("a", "b", "c")',
+    };
+    const out = serializeRegistryState(header, [row("/Game/T/T", "T", { tags })], { nodes: [] }, []);
+    const reg = loadRegistryLoose(out);
+    assert.deepEqual(reg.store.texts.sort(), [tags.T2, tags.T1].sort());
+    // ("abc", 11) sorts before "abc_0a": different bases compare by base only.
+    assert.deepEqual(Object.keys(reg.assets[0].tags), ["abc_10", "abc_0a", "T1", "T2", "T3"]);
+  });
+
+  it("defaults packageFlags to the cooked package flags", () => {
+    assert.equal(row("/Game/F/F", "F").packageFlags, 0x80002200);
+  });
+
+  it("throws on more than 65535 tags in one map", () => {
+    const b = new FixedTagStoreBuilder({ fileVersion: header.version });
+    const many = {};
+    for (let i = 0; i < 65536; i++) many[`K${i}x`] = "v";
+    assert.throws(() => b.addTagMap(many), /65535/);
+  });
+});
+
+describe("manifest rows", () => {
+  it("requires classPath", () => {
+    const base = { packageName: "/Game/Mods/X/T_A", objectName: "T_A" };
+    assert.throws(() => assertRegistryRows([base], "m"), /m\[0\]\.classPath/);
+    assert.throws(() => assertRegistryRows([{ ...base, classPath: "  " }], "m"), /classPath/);
+    assert.throws(() => loadedAssetDataFromRegistryRow(base, "r"), /classPath is required/);
+    const [row] = assertRegistryRows([{ ...base, classPath: " /Script/Engine.Texture2D " }], "m");
+    assert.equal(row.classPath, "/Script/Engine.Texture2D");
+  });
+
+  it("rejects short and malformed classPath values, naming the row", () => {
+    const base = { packageName: "/Game/Mods/X/T_A", objectName: "T_A" };
+    for (const classPath of ["Texture2D", "/Script/Engine", "/Script/Engine.A.B"]) {
+      assert.throws(
+        () => assertRegistryRows([base, { ...base, classPath }], "m"),
+        (e) => /m\[0\]/.test(e.message) && e.message.includes("/Script/Engine.Texture2D"),
+      );
+      assert.throws(
+        () => loadedAssetDataFromRegistryRow({ ...base, classPath }, "rowX"),
+        (e) => e.message.startsWith("rowX:") && e.message.includes("/Script/Engine.Texture2D"),
+      );
+      assert.throws(() => applyJsonToAssetRegistry(buildEmptyAssetRegistryBin(), [{ ...base, classPath }]), /classPath/);
+    }
+  });
+});
+
+describe("misc engine rules", () => {
+  it("folds case ASCII-only for identity", () => {
+    assert.equal(assetIdentityKey("/Game/Foo", "Bar"), assetIdentityKey("/game/FOO", "bar"));
+    assert.notEqual(assetIdentityKey("/Game/É", "x"), assetIdentityKey("/Game/é", "x"));
+  });
+
+  it("recognizes PACKAGE_FILE_TAG when reading a package summary", () => {
+    const sw = new BinaryWriter();
+    sw.writeU32(0x9e2a83c1);
+    sw.writeI32(-8); // LegacyFileVersion
+    sw.writeI32(0); // LegacyUE3Version
+    sw.writeI32(522);
+    sw.writeI32(1004);
+    sw.writeI32(0);
+    sw.writeBytes(Buffer.alloc(20, 7)); // SavedHash
+    sw.writeI32(100); // TotalHeaderSize
+    sw.writeI32(0); // CustomVersions
+    sw.writeFStringUE("/Game/P");
+    sw.writeU32(0x80002200);
+    const f = join(mkdtempSync(join(tmpdir(), "arp-")), "P.uasset");
+    writeFileSync(f, sw.toBuffer());
+    const d = packageDataV16FromCookedAssetFile(f, "/Game/P");
+    assert.equal(d.flags, 0x80002200);
+    assert.equal(d.fileVersionUE4, 522);
+  });
+});
+
 const stockPath = fileURLToPath(new URL("../../data/AssetRegistry.bin", import.meta.url));
 const haveStock = existsSync(stockPath);
 const skip = !haveStock && "stock AssetRegistry.bin not available";
@@ -128,7 +448,7 @@ describe("stock registry", { skip }, () => {
   });
 
   it("appends a numbered row in split form", () => {
-    const row = { packageName: "/Game/ZZTest/CP_300/T_Emblem_9001", objectName: "T_Emblem_9001" };
+    const row = { packageName: "/Game/ZZTest/CP_300/T_Emblem_9001", objectName: "T_Emblem_9001", classPath: "/Script/Engine.Texture2D" };
     const reg = loadRegistryLoose(applyJsonToAssetRegistry(stock, [row]));
     const added = reg.assets.filter((a) => fNameToString(a.packageName) === row.packageName);
     assert.equal(added.length, 1);
@@ -142,6 +462,7 @@ describe("stock registry", { skip }, () => {
     const row = {
       packageName: fNameToString(first.packageName).toUpperCase(),
       objectName: fNameToString(first.assetName).toLowerCase(),
+      classPath: "/Script/Engine.Texture2D",
     };
     const out = loadRegistryLoose(applyJsonToAssetRegistry(stock, [row]));
     assert.equal(out.assets.length, reg.assets.length);

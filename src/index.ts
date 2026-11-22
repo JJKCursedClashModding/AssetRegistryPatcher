@@ -19,8 +19,8 @@ import { assetIdentityKey } from "./unreal/registry/identity.js";
  *
  * @param baseBuf   Raw bytes of the base AssetRegistry.bin file.
  * @param rowsJson  Parsed JSON value — must be an array of registry row objects.
- *                  Each row must have `packageName` and `objectName`; all other
- *                  fields (classPath, packageFlags, chunkIds, tags, bundles) are
+ *                  Each row must have `packageName`, `objectName` and `classPath`;
+ *                  all other fields (packageFlags, chunkIds, tags, bundles) are
  *                  optional.
  * @param label     Context label used in error messages (e.g. a source file path).
  * @returns         Buffer containing the merged AssetRegistry.bin bytes.
@@ -62,7 +62,7 @@ export function applyJsonToAssetRegistry(
   const out = serializeRegistryState(
     reg.header,
     mergedAssets,
-    reg.dependencySection,
+    reg.dependencyData,
     reg.packages,
     cookOpts,
   );

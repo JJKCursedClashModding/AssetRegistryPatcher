@@ -20,7 +20,8 @@ export interface LoadedPackageDataV16 {
 export function readAssetPackageDataV16(r: BinaryReader, table: NameTable): LoadedPackageDataV16 {
   const diskSize = r.readI64();
   const legacyGuid = r.readBytes(16);
-  const cookedValid = r.readU8() !== 0;
+  // FMD5Hash::bIsValid: FArchive bool is a 4-byte UBOOL (FArchive::SerializeBool).
+  const cookedValid = r.readU32() !== 0;
   let cookedBytes: Buffer | undefined;
   if (cookedValid) {
     cookedBytes = r.readBytes(16);
@@ -99,9 +100,9 @@ function tryReadSummaryCore(
   customVersions: Array<{ guid: Buffer; version: number }>;
   savedHash16?: Buffer;
 } {
-  const tag = r.readI32();
+  const tag = r.readU32(); // PACKAGE_FILE_TAG (or its byte-swap); both exceed int32 range
   if (tag !== 0x9e2a83c1 && tag !== 0xc1832a9e) {
-    throw new Error(`Bad package tag 0x${(tag >>> 0).toString(16)}`);
+    throw new Error(`Bad package tag 0x${tag.toString(16)}`);
   }
   const legacyFileVersion = r.readI32();
   if (legacyFileVersion >= 0) {

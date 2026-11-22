@@ -1,10 +1,11 @@
 import { deriveLongPackageName, type ContentSegmentOptions } from "../job/contentPath.js";
 import type { LoadedAssetData } from "./assetData.js";
-import { fNameToString } from "./fnameWire.js";
+import { asciiLower, fNameToString } from "./fnameWire.js";
 
-/** FName comparison is case-insensitive: "/Game/Foo" and "/game/foo" are the same asset to the engine. */
+/** FName comparison is case-insensitive with ASCII-only folding: "/Game/Foo" and "/game/foo" are the same
+ * asset to the engine, but "É" and "é" are not. */
 export function assetIdentityKey(packageName: string, assetName: string): string {
-  return `${packageName}\x1f${assetName}`.toLowerCase();
+  return asciiLower(`${packageName}\x1f${assetName}`);
 }
 
 export function buildBaseIdentitySet(assets: LoadedAssetData[]): Set<string> {

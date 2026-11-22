@@ -11,7 +11,7 @@ import {
   parseFNameWireFromRegistryTag,
   type AssetRegistryExportPathWire,
 } from "./assetData.js";
-import { plainFName, type FNameWire } from "./fnameWire.js";
+import { compareFNameWire, plainFName, type FNameWire } from "./fnameWire.js";
 import type { UeNameRegistry } from "./ueNameRegistry.js";
 import type { TagValueTypeId } from "./fixedStore.js";
 
@@ -33,125 +33,50 @@ function toPartialMapHandle(hasNumberlessKeys: boolean, num: number, pairBegin: 
   if (num === 0) {
     return 0n;
   }
+  // FPartialMapHandle::Num is a uint16 (`check(Map.Num() <= TNumericLimits<uint16>::Max())`).
+  if (num > 0xffff) {
+    throw new Error(`Tag map has ${num} tags; the cooked registry allows at most 65535 per asset`);
+  }
   const begin = BigInt(pairBegin) & 0xffffffffn;
   const keyMode = hasNumberlessKeys ? 1n << 63n : 0n;
-  return keyMode | ((BigInt(num) & 0xffffn) << 32n) | begin;
+  return keyMode | (BigInt(num) << 32n) | begin;
 }
 
+/** `FStoreBuilder::AddTagMap` sorts keys with `FName::LexicalLess` (= `FName::Compare`). */
 function tagKeysSortedLexical(keys: string[]): string[] {
-  return [...keys].sort((a, b) => {
-    const al = a.toLowerCase();
-    const bl = b.toLowerCase();
-    if (al < bl) {
-      return -1;
-    }
-    if (al > bl) {
-      return 1;
-    }
-    return 0;
-  });
+  return keys
+    .map((k) => ({ k, f: parseFNameWireFromRegistryTag(k) }))
+    .sort((a, b) => compareFNameWire(a.f, b.f))
+    .map((e) => e.k);
 }
 
-function isStrictComplexTextStorageString(s: string): boolean {
-  const t = s.trim();
-  if (!t.length) {
-    return false;
-  }
+/**
+ * `FTextStringHelper::IsComplexText` (Text.cpp): a case-sensitive prefix peek at the start of
+ * the buffer (no whitespace skipping) for any text-history marker. LOCGEN_DATE also covers
+ * LOCGEN_DATETIME; FTextHistory_ArgumentDataFormat never matches.
+ */
+const COMPLEX_TEXT_MARKERS = [
+  "INVTEXT",
+  "NSLOCTEXT",
+  "LOCTEXT",
+  "LOCTABLE",
+  "LOCGEN_FORMAT_NAMED",
+  "LOCGEN_FORMAT_ORDERED",
+  "LOCGEN_NUMBER",
+  "LOCGEN_PERCENT",
+  "LOCGEN_CURRENCY",
+  "LOCGEN_DATE",
+  "LOCGEN_TIME",
+  "LOCGEN_TOLOWER",
+  "LOCGEN_TOUPPER",
+] as const;
 
-  const isIdentStart = (c: string): boolean => /[A-Za-z_]/.test(c);
-  const isIdentPart = (c: string): boolean => /[A-Za-z0-9_]/.test(c);
-
-  let i = 0;
-  const n = t.length;
-
-  const skipWs = (): void => {
-    while (i < n && /\s/.test(t[i]!)) {
-      i++;
-    }
-  };
-
-  const parseStringLiteral = (): boolean => {
-    if (t[i] !== '"') {
-      return false;
-    }
-    i++;
-    while (i < n) {
-      const ch = t[i]!;
-      if (ch === "\\") {
-        i += 2;
-        continue;
-      }
-      if (ch === '"') {
-        i++;
-        return true;
-      }
-      i++;
-    }
-    return false;
-  };
-
-  const parseBalancedParens = (): boolean => {
-    if (t[i] !== "(") {
-      return false;
-    }
-    let depth = 0;
-    while (i < n) {
-      const ch = t[i]!;
-      if (ch === '"') {
-        if (!parseStringLiteral()) {
-          return false;
-        }
-        continue;
-      }
-      if (ch === "(") {
-        depth++;
-      } else if (ch === ")") {
-        depth--;
-        if (depth === 0) {
-          i++;
-          return true;
-        }
-        if (depth < 0) {
-          return false;
-        }
-      }
-      i++;
-    }
-    return false;
-  };
-
-  const parseMacroExpr = (): boolean => {
-    skipWs();
-    if (i >= n || !isIdentStart(t[i]!)) {
-      return false;
-    }
-    const start = i;
-    i++;
-    while (i < n && isIdentPart(t[i]!)) {
-      i++;
-    }
-    const name = t.slice(start, i);
-    if (!(name === "NSLOCTEXT" || name === "LOCTEXT" || name === "INVTEXT")) {
-      return false;
-    }
-    skipWs();
-    if (i >= n || t[i] !== "(") {
-      return false;
-    }
-    return parseBalancedParens();
-  };
-
-  // MVP: accept a single macro expression only.
-  skipWs();
-  if (!parseMacroExpr()) {
-    return false;
-  }
-  skipWs();
-  return i === n;
+function isComplexText(s: string): boolean {
+  return COMPLEX_TEXT_MARKERS.some((m) => s.startsWith(m));
 }
 
 function classifyTagValue(s: string): "ansi" | "wide" | "loc" {
-  if (isStrictComplexTextStorageString(s)) {
+  if (isComplexText(s)) {
     return "loc";
   }
   for (let i = 0; i < s.length; i++) {

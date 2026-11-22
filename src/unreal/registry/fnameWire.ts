@@ -14,6 +14,24 @@ export function plainFName(base: string): FNameWire {
   return { base, number: 0 };
 }
 
+/** Display string of `NAME_None`. */
+export const NAME_NONE_STRING = "None";
+
+export const NAME_NONE: FNameWire = { base: NAME_NONE_STRING, number: 0 };
+
+/** ASCII-only lowercase, like UE `TChar::ToLower` / FName case folding (non-ASCII is left as-is). */
+export function asciiLower(s: string): string {
+  return s.replace(/[A-Z]+/g, (m) => m.toLowerCase());
+}
+
+/**
+ * `FName::IsNone`: the empty string and "None" (any ASCII case) are NAME_None — `FName("")` and
+ * `FName("_1")` both produce NAME_None (MakeWithNumber ignores the number for an empty string).
+ */
+export function isNoneFName(f: FNameWire): boolean {
+  return f.base === "" || (f.number === 0 && f.base.length === 4 && asciiLower(f.base) === "none");
+}
+
 export function fNameToString(f: FNameWire): string {
   if (f.number === 0) {
     return f.base;

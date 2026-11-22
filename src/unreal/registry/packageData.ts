@@ -5,7 +5,7 @@ import { readFName, type NameTable } from "./nameBatch.js";
 export function skipAssetPackageDataV16(r: BinaryReader, table: NameTable): void {
   r.readI64();
   r.skip(16);
-  const cookedValid = r.readU8() !== 0;
+  const cookedValid = r.readU32() !== 0; // FMD5Hash::bIsValid (4-byte UBOOL)
   if (cookedValid) {
     r.skip(16);
   }

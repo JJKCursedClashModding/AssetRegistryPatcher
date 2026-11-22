@@ -4,7 +4,7 @@ import type { AssetRegistryHeader } from "./header.js";
 import { assetIdentityKey, buildBaseIdentitySet } from "./identity.js";
 import type { LoadedRegistry } from "./loadRegistry.js";
 import { defaultPackageDataV16, type LoadedPackageDataV16 } from "./packageDataRw.js";
-import { fNameToString, type FNameWire } from "./fnameWire.js";
+import { asciiLower, fNameToString, type FNameWire } from "./fnameWire.js";
 import { serializeRegistryStateUe } from "./ueSerializeRegistry.js";
 import { emptyDependencySection, type DependencySectionWire } from "./dependencyRw.js";
 import type { TagValueTypeId } from "./fixedStore.js";
@@ -90,16 +90,16 @@ export function mergePackageRowsForSave(
   stagedAssets: LoadedAssetData[],
   packageDataByPackageName?: ReadonlyMap<string, LoadedPackageDataV16>,
 ): Array<{ name: FNameWire; data: LoadedPackageDataV16 }> {
-  const known = new Set(basePackages.map((p) => fNameToString(p.name).toLowerCase()));
+  const known = new Set(basePackages.map((p) => asciiLower(fNameToString(p.name))));
   const out = [...basePackages];
   for (const a of stagedAssets) {
     const pn = fNameToString(a.packageName);
-    if (!known.has(pn.toLowerCase())) {
+    if (!known.has(asciiLower(pn))) {
       out.push({
         name: a.packageName,
         data: packageDataByPackageName?.get(pn) ?? defaultPackageDataV16(pn),
       });
-      known.add(pn.toLowerCase());
+      known.add(asciiLower(pn));
     }
   }
   return out;
@@ -133,7 +133,7 @@ export function buildEmptyAssetRegistryBin(): Buffer {
 export function serializeRegistryState(
   header: AssetRegistryHeader,
   assets: LoadedAssetData[],
-  dependencySection: Buffer | DependencySectionWire,
+  dependencySection: DependencySectionWire,
   packages: Array<{ name: FNameWire; data: LoadedPackageDataV16 }>,
   tagOptions?: CookTagOptions,
 ): Buffer {
@@ -150,8 +150,8 @@ export function saveRegistryWithStagedAssets(
   packageDataByPackageName?: ReadonlyMap<string, LoadedPackageDataV16>,
 ): Buffer {
   const assets = mergeAssetRowsForSave(reg.assets, stagedAssets);
-  void packageDataByPackageName;
-  return serializeRegistryStateUe(reg.header, assets, reg.dependencyData, [], tagOptions);
+  const packages = mergePackageRowsForSave(reg.packages, stagedAssets, packageDataByPackageName);
+  return serializeRegistryStateUe(reg.header, assets, reg.dependencyData, packages, tagOptions);
 }
 
 /**
@@ -165,12 +165,14 @@ export function saveRegistryWithOnlyStagedAssets(
   tagOptions?: CookTagOptions,
   packageDataByPackageName?: ReadonlyMap<string, LoadedPackageDataV16>,
 ): Buffer {
-  void packageDataByPackageName;
+  const referenced = new Set(stagedAssets.map((a) => asciiLower(fNameToString(a.packageName))));
+  const basePackages = reg.packages.filter((p) => referenced.has(asciiLower(fNameToString(p.name))));
+  const packages = mergePackageRowsForSave(basePackages, stagedAssets, packageDataByPackageName);
   return serializeRegistryStateUe(
     reg.header,
     stagedAssets,
     emptyDependencySection(),
-    [],
+    packages,
     tagOptions,
   );
 }

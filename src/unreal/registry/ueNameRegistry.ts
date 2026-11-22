@@ -1,7 +1,10 @@
 import { BinaryWriter } from "../io/binaryWriter.js";
 import { NAME_NUMBERED_BIT } from "./constants.js";
-import type { FNameWire } from "./fnameWire.js";
+import { NAME_NONE, type FNameWire } from "./fnameWire.js";
 import { FNAME_HASH_ALGORITHM_ID, generateLowerCaseHashForNameBatchEntry } from "./nameHash.js";
+
+/** UE `NAME_SIZE` (NameTypes.h). */
+const NAME_SIZE = 1024;
 
 function isWideName(s: string): boolean {
   for (let i = 0; i < s.length; i++) {
@@ -20,6 +23,10 @@ export class UeNameRegistry {
   private readonly displayToIndex = new Map<string, number>();
 
   writeFName(w: BinaryWriter, f: FNameWire): void {
+    if (f.base === "") {
+      // FName("") is NAME_None (number ignored); the writer stores it as the "None" entry.
+      f = NAME_NONE;
+    }
     let displayIdx = this.displayToIndex.get(f.base);
     if (displayIdx === undefined) {
       displayIdx = this.bases.length;
@@ -55,8 +62,12 @@ export class UeNameRegistry {
       const s = entries[i]!;
       const wide = isWideName(s);
       const len = s.length;
-      if (len >= 0x8000) {
-        throw new Error(`Name too long for name batch: ${len}`);
+      // FNameHelper::FindOrStoreString requires Len < NAME_SIZE (1024); longer names fail a
+      // checkf and become "ERROR_NAME_SIZE_EXCEEDED" in the engine.
+      if (len >= NAME_SIZE) {
+        throw new Error(
+          `FName too long (${len} characters; UE allows at most ${NAME_SIZE - 1}): ${JSON.stringify(s.slice(0, 80))}...`,
+        );
       }
       hashes.push(generateLowerCaseHashForNameBatchEntry(s, wide));
       const b0 = (wide ? 0x80 : 0) | ((len >> 8) & 0x7f);
@@ -65,11 +76,8 @@ export class UeNameRegistry {
       headers.writeUInt8(b1, i * 2 + 1);
 
       if (wide) {
-        const pad = strOff % 2;
-        if (pad) {
-          strChunks.push(Buffer.alloc(pad, 0));
-          strOff += pad;
-        }
+        // FArchive SaveNameBatch appends strings contiguously, with no UTF-16 alignment
+        // padding (that only exists in the interleaved SaveNameBatch(OutNameData, ...) form).
         const u = Buffer.allocUnsafe(len * 2);
         for (let c = 0; c < len; c++) {
           u.writeUInt16LE(s.charCodeAt(c), c * 2);
